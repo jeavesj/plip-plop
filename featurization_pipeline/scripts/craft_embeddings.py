@@ -6,10 +6,15 @@ import time
 import hashlib
 import numpy as np
 from collections import Counter
-from rdkit import Chem
-from rdkit.Chem import AllChem, rdMolDescriptors, Descriptors, MACCSkeys
-from rdkit.Chem.rdchem import HybridizationType
 from Bio.PDB import PDBParser, MMCIFParser, Select, PDBIO, PPBuilder
+from rdkit import Chem
+from rdkit.Chem import AllChem, rdMolDescriptors, MACCSkeys
+from rdkit.Chem.rdchem import HybridizationType
+try:
+    from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
+    _HAS_MORGAN_GEN = True
+except Exception:
+    _HAS_MORGAN_GEN = False
 
 
 AA_LETTERS = 'ACDEFGHIKLMNPQRSTVWY'
@@ -220,7 +225,11 @@ def seq_aac(seq):
 
 
 def ligand_morgan(mol, n_bits=2048, radius=2):
-    fp = rdMolDescriptors.GetMorganFingerprintAsBitVect(mol, radius, nBits=n_bits)
+    if _HAS_MORGAN_GEN:
+        gen = GetMorganGenerator(radius=radius, fpSize=n_bits)
+        fp = gen.GetFingerprint(mol)
+    else:
+        fp = rdMolDescriptors.GetMorganFingerprintAsBitVect(mol, radius, nBits=n_bits)
     arr = np.zeros((n_bits,), dtype=np.int8)
     Chem.DataStructs.ConvertToNumpyArray(fp, arr)
     return arr
@@ -417,61 +426,101 @@ def plm_embed_esm2(seq, model_name, cache_dir, device, fp16, batch_size):
     cache_path = os.path.join(cache_dir, f'esm2_{h}.npy')
     if os.path.exists(cache_path):
         emb = np.load(cache_path)
-        return emb, {'plm_cached': True}
+        return emb, {'plm_cached': True, 'plm_backend': 'cache'}
 
+    # try esm backend first (ESM3-style callable, then legacy load_model_and_alphabet)
     try:
         import torch
         from esm import pretrained
-    except Exception as e:
-        raise RuntimeError('esm and torch are required for protein_plm') from e
-    
-    dev = device
-    if dev == 'auto':
-        dev = 'cuda' if torch.cuda.is_available() else 'cpu'
+        dev = device if device != 'auto' else ('cuda' if torch.cuda.is_available() else 'cpu')
+        timer = GPUTimer(dev)
 
-    timer = GPUTimer(dev)
-    timings = {}
+        timer.start('load_model')
+        model = None
+        alphabet = None
+        fn = getattr(pretrained, model_name, None)
+        if callable(fn):
+            model, alphabet = fn()
+        elif hasattr(pretrained, 'load_model_and_alphabet'):
+            model, alphabet = pretrained.load_model_and_alphabet(model_name)
+        else:
+            raise RuntimeError('esm.pretrained does not expose the requested model')
+        model.eval().to(dev)
+        if fp16 and dev == 'cuda':
+            model.half()
+        batch_converter = alphabet.get_batch_converter()
+        timer.stop('load_model')
 
-    timer.start('load_model')
-    model, alphabet = pretrained.load_model_and_alphabet(model_name)
-    model.eval().to(dev)
-    if fp16 and dev == 'cuda':
-        model.half()
-    batch_converter = alphabet.get_batch_converter()
-    timer.stop('load_model')
+        data = [('0', seq)]
+        timer.start('tokenize')
+        _, _, toks = batch_converter(data)
+        timer.stop('tokenize')
 
-    seqs = [seq]
-    data = [(str(i), s) for i, s in enumerate(seqs)]
+        timer.start('to_device')
+        toks = toks.to(dev)
+        timer.stop('to_device')
 
-    timer.start('tokenize')
-    labels, strs, toks = batch_converter(data)
-    timer.stop('tokenize')
-
-    timer.start('to_device')
-    toks = toks.to(dev)
-    timer.stop('to_device')
-    
-    with torch.no_grad():
-        all_emb = []
-        for i in range(0, toks.size(0), batch_size):
-            tb = toks[i:i+batch_size]
+        with torch.no_grad():
             timer.start('forward')
-            out = model(tb, repr_layers=[model.num_layers], return_contacts=False)
+            out = model(toks, repr_layers=[model.num_layers], return_contacts=False)
             timer.stop('forward')
-
             timer.start('pool')
-            reps = out['representations'][model.num_layers]
-            mask = (tb != alphabet.padding_idx)
+            reps = out['representations'][model.num_layers]  # [1, L, D]
+            mask = (toks != alphabet.padding_idx)            # [1, L]
             pooled = (reps * mask.unsqueeze(-1)).sum(dim=1) / mask.sum(dim=1, keepdim=True).clamp(min=1)
-            all_emb.append(pooled.float().cpu())
+            emb = pooled.float().cpu().numpy()
             timer.stop('pool')
 
-    emb = torch.cat(all_emb, dim=0).numpy()
-    np.save(cache_path, emb)
+        np.save(cache_path, emb)
+        t = timer.as_seconds(prefix='plm_')
+        t.update({'plm_cached': False, 'plm_backend': 'esm', 'plm_device': dev, 'plm_fp16': bool(fp16 and dev == 'cuda'),
+                  'plm_batch_size': int(batch_size), 'plm_model': model_name})
+        return emb, t
 
-    timings.update(timer.as_seconds(prefix='plm_'))
-    timings.update({'plm_cached': False, 'plm_device': dev, 'plm_fp16': bool(fp16 and dev == 'cuda'), 'plm_batch_size': int(batch_size), 'plm_model': model_name})
-    return emb, timings
+    except Exception as esm_err:
+        # fallback to huggingface
+        try:
+            import torch
+            from transformers import EsmTokenizer, EsmModel
+            dev = device if device != 'auto' else ('cuda' if torch.cuda.is_available() else 'cpu')
+            timer = GPUTimer(dev)
+
+            hf_name = model_name if model_name.startswith('facebook/') else f'facebook/{model_name}'
+            timer.start('load_model')
+            tok = EsmTokenizer.from_pretrained(hf_name, use_fast=False)
+            model = EsmModel.from_pretrained(hf_name)
+            model.eval().to(dev)
+            if fp16 and dev == 'cuda':
+                model.half()
+            timer.stop('load_model')
+
+            timer.start('tokenize')
+            toks = tok(seq, return_tensors='pt', add_special_tokens=True)
+            timer.stop('tokenize')
+
+            timer.start('to_device')
+            toks = {k: v.to(dev) for k, v in toks.items()}
+            timer.stop('to_device')
+
+            with torch.no_grad():
+                timer.start('forward')
+                out = model(**toks, output_hidden_states=False)
+                timer.stop('forward')
+                timer.start('pool')
+                reps = out.last_hidden_state
+                mask = toks['attention_mask']
+                pooled = (reps * mask.unsqueeze(-1)).sum(dim=1) / mask.sum(dim=1, keepdim=True).clamp(min=1)
+                emb = pooled.float().cpu().numpy()
+                timer.stop('pool')
+
+            np.save(cache_path, emb)
+            t = timer.as_seconds(prefix='plm_')
+            t.update({'plm_cached': False, 'plm_backend': 'hf', 'plm_device': dev, 'plm_fp16': bool(fp16 and dev == 'cuda'),
+                      'plm_batch_size': int(batch_size), 'plm_model': hf_name})
+            return emb, t
+
+        except Exception as hf_err:
+            raise RuntimeError('failed to load ESM2 with esm or transformers') from hf_err
 
 
 def main():
