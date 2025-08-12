@@ -9,7 +9,7 @@ from collections import Counter
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdMolDescriptors, Descriptors, MACCSkeys
 from rdkit.Chem.rdchem import HybridizationType
-from Bio.PDB import PDBParser, Select, PDBIO, PPBuilder
+from Bio.PDB import PDBParser, MMCIFParser, Select, PDBIO, PPBuilder
 
 
 AA_LETTERS = 'ACDEFGHIKLMNPQRSTVWY'
@@ -113,6 +113,67 @@ def extract_protein_and_ligand_from_complex_pdb(pdb_path, out_dir):
         AllChem.EmbedMolecule(lig_mol, AllChem.ETKDG())
         AllChem.UFFOptimizeMolecule(lig_mol, maxIters=200)
 
+    return prot_path, lig_mol
+
+
+def extract_protein_and_ligand_from_complex_cif(cif_path, out_dir):
+    parser = MMCIFParser(QUIET=True)
+    structure = parser.get_structure('complex', cif_path)
+    io = PDBIO()
+    prot_path = os.path.join(out_dir, 'protein_only.pdb')
+    io.set_structure(structure)
+    io.save(prot_path, ProteinOnlySelect())
+
+    lig_records = []
+    for model in structure:
+        for chain in model:
+            for residue in chain:
+                hetflag = residue.id[0].strip()
+                resname = residue.get_resname().strip()
+                if hetflag != '' and resname not in ['HOH', 'WAT']:
+                    lig_records.append((len(list(residue.get_atoms())), model.id, chain.id, residue.id, resname))
+    if len(lig_records) == 0:
+        raise ValueError('no ligand hetatm found in complex cif')
+    lig_records.sort(key=lambda x: x[0], reverse=True)
+    _, model_id, chain_id, resid, resname = lig_records[0]
+
+    lig_atoms = []
+    for model in structure:
+        if model.id != model_id:
+            continue
+        for chain in model:
+            if chain.id != chain_id:
+                continue
+            for residue in chain:
+                if residue.id == resid:
+                    for atom in residue.get_atoms():
+                        lig_atoms.append(atom)
+                    break
+
+    lig_pdb_path = os.path.join(out_dir, 'ligand_only.pdb')
+    with open(lig_pdb_path, 'w') as f:
+        f.write('MODEL\n')
+        for i, atom in enumerate(lig_atoms, start=1):
+            name = atom.get_name().rjust(4)
+            rname = resname.rjust(3)
+            ch = chain_id
+            resseq = resid[1]
+            x, y, z = atom.coord
+            occ = atom.get_occupancy() if atom.get_occupancy() is not None else 1.0
+            b = atom.get_bfactor() if atom.get_bfactor() is not None else 0.0
+            elem = (atom.element.strip() if atom.element else 'C').rjust(2)
+            f.write(f'HETATM{i:5d} {name} {rname} {ch}{resseq:4d}    {x:8.3f}{y:8.3f}{z:8.3f}{occ:6.2f}{b:6.2f}          {elem}\n')
+        f.write('ENDMDL\n')
+
+    lig_mol = Chem.MolFromPDBFile(lig_pdb_path, removeHs=False)
+    if lig_mol is None:
+        lig_mol = Chem.MolFromPDBFile(lig_pdb_path, removeHs=True)
+        if lig_mol is None:
+            raise ValueError('failed to parse ligand from complex cif')
+        lig_mol = Chem.AddHs(lig_mol, addCoords=True)
+    if lig_mol.GetNumConformers() == 0:
+        AllChem.EmbedMolecule(lig_mol, AllChem.ETKDG())
+        AllChem.UFFOptimizeMolecule(lig_mol, maxIters=200)
     return prot_path, lig_mol
 
 
