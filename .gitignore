@@ -14,3 +14,4 @@ results/pick_need_rerun.py
 results/model_performance_summary*
 results/model_predict*
 results/*.py
+results/dynaformer/*.pkl
