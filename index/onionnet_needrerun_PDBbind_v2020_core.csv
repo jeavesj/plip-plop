@@ -1,0 +1,5 @@
+dataset,pdb_id,resolution,release_year,target,ligand_name
+core,4f2w,2.00,2013,11.3,TDI
+core,2x00,2.40,2010,11.33,GYN
+core,3o9i,1.45,2011,11.82,A61
+core,4f3c,1.93,2013,11.82,BIG
