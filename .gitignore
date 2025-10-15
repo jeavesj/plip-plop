@@ -5,3 +5,8 @@ Dynafomer/
 results_take2/
 results/figures/
 results/pafnucy/
+results/dynaformer
+*tar.gz
+scripts/
+venv/
+utils/
