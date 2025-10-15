@@ -10,3 +10,5 @@ results/dynaformer
 scripts/
 venv/
 utils/
+results/pick_need_rerun.py
+results/model_performance_summary*
