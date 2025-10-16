@@ -9,7 +9,7 @@ $^{2}$ Institute for Quantitative Health Science and Engineering, Michigan State
 &nbsp;&nbsp;&nbsp;&nbsp; $SD = 1.266$  
 &nbsp;&nbsp;&nbsp;&nbsp; $RMSE = 1.221$  
 
-<b><u>Achieved</u> performance on CASF-2016 crystal structures <u>excluding 4f3c</u></b>  
+<b><u>Achieved</u> performance on CASF-2016 crystal structures</b>  
 &nbsp;&nbsp;&nbsp;&nbsp; $r_{pearson} = 0.824$  
 &nbsp;&nbsp;&nbsp;&nbsp; $SD = 1.548$  
 &nbsp;&nbsp;&nbsp;&nbsp; $RMSE = 1.233$  
@@ -23,9 +23,9 @@ Corresponding results and intermediate files in [/results/dynaformer](https://gi
 &nbsp;&nbsp;&nbsp;&nbsp; $RMSE = 1.164$  
 
 <b><u>Achieved</u> performance on CASF-2016 crystal structures <u>excluding 4f3c</u></b>  
-&nbsp;&nbsp;&nbsp;&nbsp; $r_{pearson} = 0.831$  
-&nbsp;&nbsp;&nbsp;&nbsp; $RMSE = 1.269$  
+&nbsp;&nbsp;&nbsp;&nbsp; $r_{pearson} = 0.835$  
+&nbsp;&nbsp;&nbsp;&nbsp; $RMSE = 1.271$  
 
-Corresponding results and intermediate files in [/results/onionnet2](https://github.com/jeavesj/plip-plop/tree/main/results/dynaformer)
+Corresponding results and intermediate files in [/results/onionnet2](https://github.com/jeavesj/plip-plop/tree/main/results/onionnet2)
 
 
