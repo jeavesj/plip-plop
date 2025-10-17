@@ -14,3 +14,4 @@ results/model_performance_summary*
 results/model_predict*
 results/*.py
 results/dynaformer/*.pkl
+featurization_pipeline/
