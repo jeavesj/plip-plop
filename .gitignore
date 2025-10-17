@@ -7,7 +7,6 @@ results/figures/
 results/pafnucy/
 results/dynaformer_take1
 *tar.gz
-scripts/
 venv/
 utils/
 results/pick_need_rerun.py
